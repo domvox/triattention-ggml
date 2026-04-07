@@ -68,6 +68,7 @@ def main():
     input_ids = tokenizer.encode(text, return_tensors="pt", truncation=True, max_length=args.max_length).to(dev)
     seq_len = input_ids.shape[1]
     trigger_pos = args.trigger_pos if args.trigger_pos > 0 else seq_len // 2
+    trigger_pos = max(1, min(trigger_pos, seq_len - 2))
     budget = args.budget
     print(f"  tokens={seq_len}, trigger={trigger_pos}, budget={budget}", file=sys.stderr)
 

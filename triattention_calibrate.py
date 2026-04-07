@@ -31,38 +31,12 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from triattention_common import _to_complex
 
 
 # ---------------------------------------------------------------------------
-# RoPE helpers (from reference, simplified)
+# RoPE helpers (shared)
 # ---------------------------------------------------------------------------
-
-def _rotate_half(x: torch.Tensor) -> torch.Tensor:
-    """Standard half-rotation for RoPE inversion (Qwen/Llama style)."""
-    d = x.shape[-1] // 2
-    return torch.cat((-x[..., d:], x[..., :d]), dim=-1)
-
-
-def _invert_rope(
-    rotated: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
-    scale: float,
-) -> torch.Tensor:
-    """Invert RoPE rotation to recover pre-RoPE vectors."""
-    s = torch.tensor(scale, device=rotated.device, dtype=rotated.dtype)
-    base = rotated / s
-    cos_u = cos / s
-    sin_u = sin / s
-    return base * cos_u - _rotate_half(base) * sin_u
-
-
-def _to_complex(tensor: torch.Tensor) -> torch.Tensor:
-    """Convert [*, head_dim] to [*, head_dim//2] complex pairs (half style)."""
-    t = tensor.to(dtype=torch.float32)
-    fc = t.shape[-1] // 2
-    return torch.complex(t[..., :fc].contiguous(), t[..., fc:].contiguous())
-
 
 # ---------------------------------------------------------------------------
 # Binary stats format — TRIA v2

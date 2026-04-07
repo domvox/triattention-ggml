@@ -2,7 +2,7 @@
 """Export test vectors for C reference scoring validation."""
 import struct, sys
 import torch
-from triattention_common import load_stats, score_keys, build_omega, _to_complex
+from triattention_common import load_stats, score_keys, build_omega
 
 def main():
     if len(sys.argv) < 3:
