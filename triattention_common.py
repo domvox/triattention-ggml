@@ -60,7 +60,7 @@ def score_keys(
     phi = torch.atan2(rel.imag, rel.real)  # NOTE: C++ can bypass atan2 with trig identities
     amp = qma.unsqueeze(0) * ka
     # Norm extra term: (E[||q||] - ||E[q]||) * ||k|| — eq 8-10
-    extra = ((q_abs_mean - qma).unsqueeze(0) * ka).sum(dim=1)
+    extra = ((q_abs_mean - qma).clamp_min(0).unsqueeze(0) * ka).sum(dim=1)
     # Geometric future offsets: 1, 2, 4, ..., 2^16
     offsets = torch.tensor([2.0 ** i for i in range(17)], device=k_pre.device)
     bd = cur_pos - key_pos.float()

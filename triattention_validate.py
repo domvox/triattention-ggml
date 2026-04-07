@@ -83,6 +83,7 @@ def main():
     print(f"\nValidation at query position {query_pos}, budget={budget}:", file=sys.stderr)
 
     recalls = []
+    layer_recalls = {li: [] for li in range(nl)}
     for li in range(nl):
         k_pre = captured_k.get(li)
         attn_layer = attentions[li]  # [1, num_heads, seq, seq]
@@ -119,6 +120,7 @@ def main():
             overlap = len(true_set & pred_set)
             recall = overlap / len(true_set) if true_set else 0
             recalls.append(recall)
+            layer_recalls[li].append(recall)
 
     mean_recall = sum(recalls) / len(recalls) if recalls else 0
     print(f"\n=== Validation Results ===", file=sys.stderr)
@@ -127,12 +129,9 @@ def main():
 
     # Breakdown by layer
     per_layer = {}
-    idx = 0
     for li in range(nl):
-        layer_recalls = recalls[idx:idx+nkv]
-        idx += nkv
-        if layer_recalls:
-            per_layer[li] = sum(layer_recalls)/len(layer_recalls)
+        if layer_recalls[li]:
+            per_layer[li] = sum(layer_recalls[li])/len(layer_recalls[li])
     
     best_layers = sorted(per_layer.items(), key=lambda x: -x[1])[:5]
     worst_layers = sorted(per_layer.items(), key=lambda x: x[1])[:5]

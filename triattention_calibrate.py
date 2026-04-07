@@ -144,7 +144,7 @@ def _write_stats(
                     f.write(b"\x00" * (freq_count * 4 * 4))
                 written += 1
 
-    total_bytes = HEADER_SIZE + written * freq_count * 4 * 4
+    total_bytes = HEADER_SIZE + num_layers * 4 + written * freq_count * 4 * 4
     print(f"Wrote {path} ({total_bytes} bytes, {written} heads)", file=sys.stderr)
 
 
