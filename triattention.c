@@ -115,34 +115,54 @@ static void score_keys_single_head(
         1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384,32768,65536
     };
 
+    /*
+     * Optimized: avoid atan2/cos(phase) in inner loop.
+     *
+     * amp * cos(delta*omega + phi) = Re[ (q_mean * conj(k)) * e^(j*delta*omega) ]
+     *                              = rel_real * cos(delta*omega) - rel_imag * sin(delta*omega)
+     *
+     * where rel = q_mean * conj(k):
+     *   rel_real = qr*kr + qi*ki
+     *   rel_imag = qi*kr - qr*ki
+     *
+     * cos/sin(delta*omega) depend only on position, not on head stats,
+     * so we precompute them per offset.
+     */
+
     for (int s = 0; s < seq_len; s++) {
         const float *kr = k_real + s * fc;
         const float *ki = k_imag + s * fc;
-        float extra = 0.0f;
         float base_delta = (float)(cur_pos - key_pos[s]);
-        float trig_sum = 0.0f;
 
-        /* Precompute per-band: phi, amp, extra */
-        /* Then accumulate trig over offsets */
-        /* Fused loop for cache efficiency */
+        /* Precompute rel and ka per freq band */
+        float rel_r[fc], rel_i[fc], ka[fc];
+        float extra = 0.0f;
+
+        for (int f = 0; f < fc; f++) {
+            ka[f] = sqrtf(kr[f]*kr[f] + ki[f]*ki[f]);
+            /* rel = q_mean * conj(k) — includes both amplitude and phase */
+            rel_r[f] = hs->q_mean_real[f]*kr[f] + hs->q_mean_imag[f]*ki[f];
+            rel_i[f] = hs->q_mean_imag[f]*kr[f] - hs->q_mean_real[f]*ki[f];
+
+            float residual = hs->q_abs_mean[f] - hs->qma[f];
+            if (residual > 0.0f) extra += residual * ka[f];
+        }
+
+        /* Accumulate trig score over geometric offsets */
+        float trig_sum = 0.0f;
         for (int o = 0; o < TRIA_N_OFFSETS; o++) {
             float delta = base_delta + offsets[o];
             float trig = 0.0f;
             for (int f = 0; f < fc; f++) {
-                float ka_f = sqrtf(kr[f]*kr[f] + ki[f]*ki[f]);
-                float rel_r = hs->q_mean_real[f]*kr[f] + hs->q_mean_imag[f]*ki[f];
-                float rel_i = hs->q_mean_imag[f]*kr[f] - hs->q_mean_real[f]*ki[f];
-                float phi = atan2f(rel_i, rel_r);
-                float amp = hs->qma[f] * ka_f;
-                trig += amp * cosf(delta * omega[f] + phi);
-
-                if (o == 0) {
-                    float residual = hs->q_abs_mean[f] - hs->qma[f];
-                    if (residual > 0.0f) extra += residual * ka_f;
-                }
+                /* Re[ rel * e^(j*delta*omega) ] — no atan2 needed */
+                float angle = delta * omega[f];
+                float cos_d = cosf(angle);
+                float sin_d = sinf(angle);
+                trig += rel_r[f] * cos_d - rel_i[f] * sin_d;
             }
             trig_sum += trig;
         }
+
         out[s] = trig_sum / (float)TRIA_N_OFFSETS + extra;
     }
 }
