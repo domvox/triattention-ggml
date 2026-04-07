@@ -4,3 +4,4 @@ triattention_score_ref
 test_tria_lib
 test_tria_gqa
 test_tria_*.c
+bench_tria
