@@ -5,6 +5,7 @@
  * Standalone — compiles without ggml for testing, integrates via ggml_map_custom1.
  */
 
+#define _GNU_SOURCE  /* sincosf */
 #include "triattention.h"
 #include <math.h>
 #include <stdio.h>
@@ -140,8 +141,7 @@ static struct tria_cs_table * tria_cs_precompute(
             int base = (s * TRIA_N_OFFSETS + o) * fc;
             for (int f = 0; f < fc; f++) {
                 float angle = delta * omega[f];
-                t->cos_tab[base + f] = cosf(angle);
-                t->sin_tab[base + f] = sinf(angle);
+                sincosf(angle, &t->sin_tab[base + f], &t->cos_tab[base + f]);
             }
         }
     }
