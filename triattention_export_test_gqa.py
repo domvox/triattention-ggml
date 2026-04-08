@@ -2,9 +2,13 @@
 """Export GQA-aggregated test vectors for C library validation."""
 import struct, sys
 import torch
-from triattention_common import load_stats, score_keys, build_omega, _to_complex
+from triattention_common import load_stats, score_keys, build_omega
 
 def main():
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <stats.bin> <output.bin> [layer] [kv_head]", file=sys.stderr)
+        sys.exit(1)
+
     stats_path, out_path = sys.argv[1], sys.argv[2]
     layer = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     kv_head = int(sys.argv[4]) if len(sys.argv) > 4 else 0

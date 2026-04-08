@@ -27,7 +27,7 @@ from typing import Dict
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-from triattention_common import MAGIC, HEADER_SIZE, load_stats, _to_complex, score_keys, build_omega
+from triattention_common import load_stats, build_omega, compute_keep_sets
 
 
 def run_scoring(
@@ -115,50 +115,13 @@ def run_scoring(
         if trigger_pos <= budget:
             continue
 
-        # Score each layer, each KV head
-        total_kept = 0
-        total_evicted = 0
-
-        for layer_idx in range(num_layers):
-            k_pre = captured_k.get(layer_idx)
-            if k_pre is None:
-                continue
-
-            for kv_head_idx in range(num_kv_heads):
-                k_head = k_pre[0, kv_head_idx, :trigger_pos]  # [trigger_pos, head_dim]
-                key_pos = positions[:trigger_pos]
-
-                # Aggregate scores from all attention heads mapping to this KV head
-                head_scores = []
-                for g in range(gqa_groups):
-                    attn_head = kv_head_idx * gqa_groups + g
-                    s = cal["stats"].get((layer_idx, attn_head))
-                    if s is None:
-                        continue
-                    scores = score_keys(
-                        k_head, key_pos, s["q_mean"], s["q_abs_mean"],
-                        omega, trigger_pos,
-                    )
-                    head_scores.append(scores)
-
-                if not head_scores:
-                    continue
-
-                # Max-aggregate across query heads (paper eq 13)
-                stacked = torch.stack(head_scores)
-                # Z-normalize per head
-                mean = stacked.mean(dim=1, keepdim=True)
-                std = stacked.std(dim=1, keepdim=True).clamp_min(1e-6)
-                normalized = (stacked - mean) / std
-                final_scores = normalized.max(dim=0).values
-
-                # Select top-budget (per-layer adaptive)
-                layer_scale = cal["layer_budget_scales"][layer_idx]
-                layer_budget = max(1, int(budget * layer_scale))
-                keep_count = min(layer_budget, trigger_pos)
-                keep_idx = torch.topk(final_scores, k=keep_count).indices
-                total_kept += keep_count
-                total_evicted += trigger_pos - keep_count
+        keep_sets = compute_keep_sets(
+            captured_k, positions, cal, omega, trigger_pos,
+            budget, num_kv_heads, gqa_groups, num_layers,
+        )
+        total_kept = sum(len(v) for v in keep_sets.values())
+        total_heads = len(keep_sets)
+        total_evicted = total_heads * trigger_pos - total_kept
 
         evict_pct = 100.0 * total_evicted / (total_kept + total_evicted) if (total_kept + total_evicted) > 0 else 0
         print(f"  pos={trigger_pos:5d}: kept={total_kept} evicted={total_evicted} ({evict_pct:.1f}% pruned)", file=sys.stderr)

@@ -67,6 +67,8 @@ def main():
     text = Path(args.input).read_text(encoding="utf-8")
     input_ids = tokenizer.encode(text, return_tensors="pt", truncation=True, max_length=args.max_length).to(dev)
     seq_len = input_ids.shape[1]
+    if seq_len < 2:
+        raise ValueError("Need at least 2 tokens to run validation")
     print(f"  tokens={seq_len}", file=sys.stderr)
 
     print("Forward pass (eager, with attention weights) ...", file=sys.stderr)
