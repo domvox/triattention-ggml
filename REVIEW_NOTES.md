@@ -199,3 +199,13 @@ on Gemma 4), while AmesianX compresses everything.
 | turbo3 + turbo3-K-SWA + q8_0-V-SWA | **97/100 (97%)** | **+1%** |
 
 Best result yet. turbo3 actually scores HIGHER than f16 on Gemma 4 31B.
+
+### GSM8K — Qwen3.5-27B (Q5_K_M, 100 problems)
+
+| Config | Accuracy | Drop |
+|---|---|---|
+| f16 | 66/100 (66%) | — |
+| turbo3 | **72/100 (72%)** | **+6%** |
+
+turbo3 is BETTER than f16 on all three tested models.
+Attention sharpening (α = 1 + 1/2×SQNR) overcompensates.
