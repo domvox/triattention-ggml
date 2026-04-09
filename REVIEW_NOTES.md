@@ -178,12 +178,13 @@ only +2.8% PPL and faster throughput (FA on shorter cache).
 | Config | Accuracy | KV MiB | Compression | Accuracy drop |
 |---|---|---|---|---|
 | f16 baseline | 83/100 (83%) | 340 | 1.0× | — |
-| turbo3 global + f16 SWA | 82/100 (82%) | ~120 | 2.8× | **-1%** |
+| turbo3 global + f16 SWA | 82/100 (82%) | ~120 | 2.8× | -1% |
+| **turbo3 + turbo3-K-SWA + q8_0-V-SWA** | **83/100 (83%)** | **117** | **2.9×** | **0%** |
 
 Comparison with AmesianX TurboQuant (CUDA, DGX Spark, 65 problems):
 | | AmesianX | domvox (HIP) |
 |---|---|---|
-| Accuracy drop | -19% (57%→46%) | **-1%** (83%→82%) |
+| Accuracy drop | -19% (57%→46%) | **0%** (83%→83%) |
 | Compression | 5.2× | 2.8× |
 
 Our implementation preserves quality significantly better despite lower compression.
