@@ -190,3 +190,12 @@ Comparison with AmesianX TurboQuant (CUDA, DGX Spark, 65 problems):
 Our implementation preserves quality significantly better despite lower compression.
 The difference is that we keep SWA cache in f16 (SWA quantization destroys quality
 on Gemma 4), while AmesianX compresses everything.
+
+### GSM8K — Gemma 4 31B Dense (Q4_K_M, 100 problems)
+
+| Config | Accuracy | Drop |
+|---|---|---|
+| f16 | 96/100 (96%) | — |
+| turbo3 + turbo3-K-SWA + q8_0-V-SWA | **97/100 (97%)** | **+1%** |
+
+Best result yet. turbo3 actually scores HIGHER than f16 on Gemma 4 31B.
