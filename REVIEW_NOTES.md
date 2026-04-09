@@ -172,3 +172,20 @@ only +2.8% PPL and faster throughput (FA on shorter cache).
   nullptr on hybrid models (memory is `llama_memory_hybrid`, not `llama_kv_cache`)
 - Fix: added `get_kv()` helper that tries direct cast first, then extracts
   `mem_attn` from `llama_memory_hybrid` via `get_mem_attn()`
+
+### GSM8K Math Accuracy (Gemma 4 26B-A4B, Q4_K_M, 100 problems)
+
+| Config | Accuracy | KV MiB | Compression | Accuracy drop |
+|---|---|---|---|---|
+| f16 baseline | 83/100 (83%) | 340 | 1.0× | — |
+| turbo3 global + f16 SWA | 82/100 (82%) | ~120 | 2.8× | **-1%** |
+
+Comparison with AmesianX TurboQuant (CUDA, DGX Spark, 65 problems):
+| | AmesianX | domvox (HIP) |
+|---|---|---|
+| Accuracy drop | -19% (57%→46%) | **-1%** (83%→82%) |
+| Compression | 5.2× | 2.8× |
+
+Our implementation preserves quality significantly better despite lower compression.
+The difference is that we keep SWA cache in f16 (SWA quantization destroys quality
+on Gemma 4), while AmesianX compresses everything.
