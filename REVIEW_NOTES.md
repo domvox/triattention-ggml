@@ -104,6 +104,28 @@ to be more diffuse and less predictable from pre-RoPE frequency statistics alone
 - [ ] llama.cpp integration test with qwen3.5_27b.bin
 - [ ] Restart llama-server + win11 VM
 
+### Gemma 4 TurboQuant Results (26B-A4B MoE, Q4_K_M, 2K ctx, 5 chunks)
+
+Best config: `--cache-type-k turbo3 --cache-type-v turbo3 --cache-type-k-swa turbo3 --cache-type-v-swa q8_0`
+
+| Global K/V | SWA K | SWA V | KV MiB | Compression | PPL | vs f16 |
+|---|---|---|---|---|---|---|
+| f16/f16 | f16 | f16 | 340 | 1.0× | 35,131 | baseline |
+| turbo3 G=256 | turbo3 | q8_0 | 117 | 2.9× | **10,839** | **0.31×** |
+| turbo3 G=256 | q8_0 | q8_0 | — | — | 14,082 | 0.40× |
+| turbo3 G=256 | f16 | f16 | — | — | 14,280 | 0.41× |
+| turbo3 G=128 | turbo3 | turbo3 | — | — | 46,504 | 1.32× |
+
+Note: PPL on instruct model + raw text is not directly meaningful, but
+relative comparisons are valid. turbo3 G=256 consistently beats f16.
+
+Key findings:
+- GROUP_SIZE=256 is critical for head_dim=512 (2.5× better than G=128)
+- SWA K benefits from turbo3 WHT rotation (better than q8_0)
+- SWA V should use q8_0 (turbo3 on V hurts quality)
+- Root cause of earlier G=256 failures: validation guard in set-rows.cu
+  was silently resetting 256→128, causing encode/decode mismatch
+
 ### Attention Mass Results (Phase 2c)
 
 | Model | Mass retained (50% ret.) | Recall@128 |
