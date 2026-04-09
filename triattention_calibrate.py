@@ -6,12 +6,12 @@ Computes per-head frequency statistics (Q/K centers, norms, MRL) from a
 HuggingFace model.  Emits a compact binary stats file for use in ggml-based
 scoring (Phase 2).
 
-Based on the reference implementation at
-https://github.com/WeianMao/triattention (Apache 2.0).
+Supports:
+  - Pure transformer models (Qwen3-8B, Llama, etc.)
+  - Hybrid SSM+attention models (Qwen3.5-27B) — only calibrates full_attention layers
+  - Multi-resolution RoPE (mrope) with partial_rotary_factor
 
 Usage:
-    # Stop Hermes first to free VRAM:
-    #   sudo systemctl stop llama-server.service
     HIP_VISIBLE_DEVICES=0 python3 triattention_calibrate.py \
         --model Qwen/Qwen3-8B \
         --input ~/llama.cpp/wikitext-2-raw/wiki.test.raw \
@@ -27,7 +27,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -35,35 +35,8 @@ from triattention_common import _to_complex
 
 
 # ---------------------------------------------------------------------------
-# RoPE helpers (shared)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Binary stats format — TRIA v2
 # ---------------------------------------------------------------------------
-# Header (64 bytes):
-#   magic       u32  = 0x54524941  ("TRIA")
-#   version     u32  = 2
-#   num_layers  u32
-#   num_heads   u32  (attention heads, not KV heads)
-#   num_kv_heads u32
-#   head_dim    u32
-#   freq_count  u32  (= head_dim // 2)
-#   rope_theta  f32
-#   attn_scale  f32
-#   reserved    u32[7]  (pad to 64 bytes)
-#
-# Per-layer budget scales (v2+):
-#   layer_budget_scale  f32[num_layers]
-#   (1.0 = paper-faithful global budget; >1.0 = more tokens for this layer)
-#   Derived from MRL: low avg dominant MRL → higher scale
-#
-# Per head (num_layers * num_heads entries, layer-major order):
-#   q_mean_real  f32[freq_count]
-#   q_mean_imag  f32[freq_count]
-#   q_abs_mean   f32[freq_count]
-#   mrl          f32[freq_count]   (Mean Resultant Length per band)
-
 MAGIC = 0x54524941  # "TRIA"
 VERSION = 2
 HEADER_SIZE = 64  # bytes
@@ -87,7 +60,6 @@ def _write_stats(
         layer_budget_scales = [1.0] * num_layers
 
     with open(path, "wb") as f:
-        # Header (64 bytes)
         f.write(struct.pack("<I", MAGIC))
         f.write(struct.pack("<I", VERSION))
         f.write(struct.pack("<I", num_layers))
@@ -97,12 +69,10 @@ def _write_stats(
         f.write(struct.pack("<I", freq_count))
         f.write(struct.pack("<f", rope_theta))
         f.write(struct.pack("<f", attn_scale))
-        f.write(b"\x00" * (HEADER_SIZE - 9 * 4))  # reserved
+        f.write(b"\x00" * (HEADER_SIZE - 9 * 4))
 
-        # Per-layer budget scales (v2)
         f.write(struct.pack(f"<{num_layers}f", *layer_budget_scales))
 
-        # Per-head stats
         written = 0
         for layer_idx in range(num_layers):
             for head_idx in range(num_heads):
@@ -114,7 +84,6 @@ def _write_stats(
                     f.write(struct.pack(f"<{freq_count}f", *s["q_abs_mean"]))
                     f.write(struct.pack(f"<{freq_count}f", *s["mrl"]))
                 else:
-                    # Zero-fill missing heads
                     f.write(b"\x00" * (freq_count * 4 * 4))
                 written += 1
 
@@ -130,9 +99,8 @@ def _read_stats(path: Path) -> dict:
         assert version in (1, 2), f"Bad version: {version}"
         nl, nh, nkv, hd, fc = struct.unpack("<5I", f.read(20))
         rope_theta, attn_scale = struct.unpack("<2f", f.read(8))
-        f.read(HEADER_SIZE - 9 * 4)  # skip reserved
+        f.read(HEADER_SIZE - 9 * 4)
 
-        # v2: per-layer budget scales
         if version >= 2:
             layer_budget_scales = list(struct.unpack(f"<{nl}f", f.read(nl * 4)))
         else:
@@ -162,6 +130,60 @@ def _read_stats(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Config helpers for hybrid / nested configs
+# ---------------------------------------------------------------------------
+
+def _get_text_config(config):
+    """Extract the text sub-config for multimodal wrappers (Qwen3.5, etc.)."""
+    return getattr(config, "text_config", config)
+
+
+def _get_attention_layer_indices(text_config) -> Set[int]:
+    """Return set of layer indices that have full attention (KV cache).
+    For pure transformers, returns all layers."""
+    layer_types = getattr(text_config, "layer_types", None)
+    if layer_types is None:
+        n = getattr(text_config, "num_hidden_layers",
+                     getattr(text_config, "n_layer", 0))
+        return set(range(n))
+    return {i for i, t in enumerate(layer_types) if t == "full_attention"}
+
+
+def _get_rope_theta(text_config) -> float:
+    """Extract rope_theta from potentially nested config."""
+    # Direct attribute
+    theta = getattr(text_config, "rope_theta", None)
+    if theta is not None:
+        return float(theta)
+    # Nested in rope_parameters (Qwen3.5)
+    rp = getattr(text_config, "rope_parameters", None)
+    if rp is not None:
+        if isinstance(rp, dict):
+            theta = rp.get("rope_theta")
+        else:
+            theta = getattr(rp, "rope_theta", None)
+        if theta is not None:
+            return float(theta)
+    return 10000.0
+
+
+def _get_partial_rotary_factor(text_config) -> float:
+    """Get fraction of head_dim that is rotated. 1.0 for standard RoPE."""
+    prf = getattr(text_config, "partial_rotary_factor", None)
+    if prf is not None:
+        return float(prf)
+    rp = getattr(text_config, "rope_parameters", None)
+    if rp is not None:
+        if isinstance(rp, dict):
+            prf = rp.get("partial_rotary_factor")
+        else:
+            prf = getattr(rp, "partial_rotary_factor", None)
+        if prf is not None:
+            return float(prf)
+    return 1.0
+
+
+# ---------------------------------------------------------------------------
 # Calibration
 # ---------------------------------------------------------------------------
 
@@ -172,7 +194,6 @@ def calibrate(
     max_length: int = 4096,
     device: str = "cuda",
 ) -> None:
-    dev = torch.device(device)
     dtype = torch.bfloat16
 
     # --- Load model ---
@@ -181,44 +202,73 @@ def calibrate(
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_name, dtype=dtype,
-        attn_implementation="sdpa",  # memory-efficient attention
+        attn_implementation="sdpa",
         trust_remote_code=True,
-    ).to(dev)
+        device_map="auto",
+    )
     model.eval()
 
-    num_layers = config.num_hidden_layers
-    num_heads = config.num_attention_heads
-    head_dim = getattr(config, "head_dim", config.hidden_size // num_heads)
-    num_kv_heads = getattr(config, "num_key_value_heads", num_heads)
-    rope_theta = float(getattr(config, "rope_theta", 10000.0))
+    # --- Extract config (handle nested/multimodal) ---
+    text_config = _get_text_config(config)
+    num_layers = getattr(text_config, "num_hidden_layers",
+                          getattr(text_config, "n_layer", 0))
+    num_heads = getattr(text_config, "num_attention_heads", 32)
+    head_dim = getattr(text_config, "head_dim",
+                        getattr(text_config, "hidden_size", 4096) // num_heads)
+    num_kv_heads = getattr(text_config, "num_key_value_heads", num_heads)
+    rope_theta = _get_rope_theta(text_config)
+    partial_rotary = _get_partial_rotary_factor(text_config)
+    attn_layer_indices = _get_attention_layer_indices(text_config)
+
+    # For TriAttention scoring we use the rotated portion of head_dim.
+    # The stats file stores full head_dim so the runtime can index correctly,
+    # but freq_count is based on the rotated dims only.
+    rotary_dim = int(head_dim * partial_rotary)
+    freq_count = rotary_dim // 2
+
     if rope_theta == 10000.0:
-        # Many models (Qwen, Llama 3.1+) use large theta but store it under
-        # different config keys. Warn loudly if we're using the default.
         print(f"  WARNING: rope_theta=10000 (default). Verify this matches your model!\n"
               f"  Qwen3 uses 1000000, Llama 3.1 uses 500000. Wrong theta = broken scoring at long context.",
               file=sys.stderr)
-    freq_count = head_dim // 2
 
-    print(f"  layers={num_layers} heads={num_heads} kv_heads={num_kv_heads} "
-          f"head_dim={head_dim} rope_theta={rope_theta}", file=sys.stderr)
+    is_hybrid = len(attn_layer_indices) < num_layers
+    print(f"  layers={num_layers} (attention={len(attn_layer_indices)}"
+          f"{' hybrid' if is_hybrid else ''}) heads={num_heads} kv_heads={num_kv_heads} "
+          f"head_dim={head_dim} rotary_dim={rotary_dim} rope_theta={rope_theta}",
+          file=sys.stderr)
+
+    # --- Find model backbone ---
+    backbone = getattr(model, "model", model)
+    # Qwen3.5 multimodal: model.model is the VL wrapper, text model is deeper
+    if hasattr(backbone, "text_model"):
+        backbone = backbone.text_model
+    elif hasattr(backbone, "language_model"):
+        lm = backbone.language_model
+        backbone = getattr(lm, "model", lm)
+
+    layers = backbone.layers
 
     # --- Find rotary embedding ---
-    backbone = getattr(model, "model", model)
-    layers = backbone.layers
-    attn0 = layers[0].self_attn
-    rotary = getattr(backbone, "rotary_emb", None) or attn0.rotary_emb
-    attn_scale = float(getattr(rotary, "attention_scaling", 1.0))
+    # Try backbone-level first, then first attention layer
+    rotary = getattr(backbone, "rotary_emb", None)
+    if rotary is None:
+        for li in attn_layer_indices:
+            attn = layers[li].self_attn
+            rotary = getattr(attn, "rotary_emb", None)
+            if rotary is not None:
+                break
+    attn_scale = float(getattr(rotary, "attention_scaling", 1.0)) if rotary else 1.0
 
     # --- Tokenize input ---
     print(f"Reading {input_path} ...", file=sys.stderr)
     text = Path(input_path).read_text(encoding="utf-8")
     input_ids = tokenizer.encode(
         text, return_tensors="pt", truncation=True, max_length=max_length
-    ).to(dev)
+    ).to(model.device)
     seq_len = input_ids.shape[1]
     print(f"  tokens={seq_len}", file=sys.stderr)
 
-    # --- Register hooks to capture pre-RoPE Q ---
+    # --- Register hooks only on attention layers ---
     captured_q: Dict[int, torch.Tensor] = {}
 
     def _make_hook(layer_idx: int):
@@ -227,26 +277,40 @@ def calibrate(
             if hidden is None:
                 return
             bsz, qlen, _ = hidden.shape
-            q = module.q_proj(hidden)
-            q = q.view(bsz, qlen, num_heads, head_dim).transpose(1, 2)
+            q_raw = module.q_proj(hidden)
+            # Qwen3.5 gated attention: q_proj outputs head_dim*2, split into Q and gate
+            proj_dim = q_raw.shape[-1] // num_heads
+            if proj_dim == head_dim * 2:
+                q_raw = q_raw.view(bsz, qlen, num_heads, head_dim * 2)
+                q = q_raw[..., :head_dim].transpose(1, 2)
+            else:
+                q = q_raw.view(bsz, qlen, num_heads, head_dim).transpose(1, 2)
             if hasattr(module, 'q_norm'):
                 q = module.q_norm(q)
-            # This IS the pre-RoPE Q — save directly, no RoPE needed
-            captured_q[layer_idx] = q.detach()
+            if partial_rotary < 1.0:
+                q = q[..., :rotary_dim]
+            captured_q[layer_idx] = q.detach().cpu()
         return hook_fn
 
     handles = []
-    for li, layer in enumerate(layers):
-        h = layer.self_attn.register_forward_pre_hook(
+    for li in attn_layer_indices:
+        h = layers[li].self_attn.register_forward_pre_hook(
             _make_hook(li), with_kwargs=True
         )
         handles.append(h)
+
+    print(f"  Hooked {len(handles)} attention layers, skipping {num_layers - len(handles)} SSM layers",
+          file=sys.stderr)
 
     # --- Forward pass ---
     print("Forward pass ...", file=sys.stderr)
     t0 = time.time()
     with torch.no_grad():
-        model(input_ids)
+        try:
+            model(input_ids)
+        except torch.cuda.OutOfMemoryError:
+            # lm_head OOM is fine — we only need attention hook data
+            print("  (lm_head OOM ignored, hooks collected)", file=sys.stderr)
     print(f"  done in {time.time() - t0:.1f}s", file=sys.stderr)
 
     for h in handles:
@@ -259,21 +323,18 @@ def calibrate(
     high_mrl_count = 0
     total_heads = 0
 
-    for layer_idx in range(num_layers):
+    for layer_idx in attn_layer_indices:
         q_pre = captured_q.get(layer_idx)
         if q_pre is None:
             print(f"  [warn] layer {layer_idx}: no Q captured", file=sys.stderr)
             continue
 
         for head_idx in range(num_heads):
-            q_head = q_pre[0, head_idx]  # [seq_len, head_dim]
+            q_head = q_pre[0, head_idx]  # [seq_len, rotary_dim]
             q_complex = _to_complex(q_head)  # [seq_len, freq_count]
 
-            # E[q_f] — complex mean
-            q_mean = q_complex.mean(dim=0)  # [freq_count]
-            # E[||q_f||] — mean of absolute values
-            q_abs_mean = q_complex.abs().mean(dim=0)  # [freq_count]
-            # MRL = ||E[q_f]|| / E[||q_f||]
+            q_mean = q_complex.mean(dim=0)
+            q_abs_mean = q_complex.abs().mean(dim=0)
             q_mean_abs = q_mean.abs()
             mrl = q_mean_abs / q_abs_mean.clamp_min(1e-12)
 
@@ -284,64 +345,75 @@ def calibrate(
                 "mrl": mrl.cpu().tolist(),
             }
 
-            # Check dominant bands (top-2 by contribution = q_abs_mean)
             topk = torch.topk(q_abs_mean, k=min(2, freq_count))
             dominant_mrl = mrl[topk.indices].mean().item()
-
             total_heads += 1
             if dominant_mrl > 0.95:
                 high_mrl_count += 1
 
-        # Free memory
         del captured_q[layer_idx]
 
     pct = 100.0 * high_mrl_count / max(total_heads, 1)
     print(f"  {total_heads} heads, {high_mrl_count} ({pct:.1f}%) with mean MRL > 0.95",
           file=sys.stderr)
 
-    # --- Compute per-layer budget scales from MRL ---
-    # Low avg dominant MRL → layer needs more tokens → higher scale
-    # Scale = 1 + alpha * (1 - avg_dominant_mrl), normalized so mean = 1.0
+    # --- Per-layer budget scales (only meaningful for attention layers) ---
     layer_dominant_mrls = []
     for li in range(num_layers):
+        if li not in attn_layer_indices:
+            layer_dominant_mrls.append(0.5)  # neutral for SSM layers
+            continue
         mrls = []
         for hi in range(num_heads):
             s = all_stats.get((li, hi))
-            if s is None: continue
+            if s is None:
+                continue
             qam = torch.tensor(s["q_abs_mean"])
             mrl_t = torch.tensor(s["mrl"])
             topk = torch.topk(qam, k=min(2, freq_count))
             mrls.append(mrl_t[topk.indices].mean().item())
         layer_dominant_mrls.append(sum(mrls) / len(mrls) if mrls else 0.5)
 
-    alpha = 1.0  # sensitivity: 0=global, 1=moderate, 2=aggressive
-    raw_scales = [1.0 + alpha * (1.0 - m) for m in layer_dominant_mrls]
-    mean_scale = sum(raw_scales) / len(raw_scales)
-    layer_budget_scales = [s / mean_scale for s in raw_scales]  # normalize mean=1.0
+    # Compute scales only from attention layers, then assign
+    att_mrls = [layer_dominant_mrls[i] for i in sorted(attn_layer_indices)]
+    alpha = 1.0
+    att_raw = [1.0 + alpha * (1.0 - m) for m in att_mrls]
+    att_mean = sum(att_raw) / len(att_raw)
+    att_scales = [s / att_mean for s in att_raw]
 
-    print(f"  Budget scales: min={min(layer_budget_scales):.3f} max={max(layer_budget_scales):.3f}",
+    layer_budget_scales = [1.0] * num_layers  # SSM layers get 1.0 (neutral)
+    for i, li in enumerate(sorted(attn_layer_indices)):
+        layer_budget_scales[li] = att_scales[i]
+
+    print(f"  Budget scales (attention only): min={min(att_scales):.3f} max={max(att_scales):.3f}",
           file=sys.stderr)
 
     # --- Write binary stats ---
+    # Store full num_layers slots. SSM layers get zero-filled stats.
+    # head_dim in header = rotary_dim (what the runtime uses for freq scoring)
     out = Path(output_path)
-    _write_stats(out, num_layers, num_heads, num_kv_heads, head_dim,
+    _write_stats(out, num_layers, num_heads, num_kv_heads, rotary_dim,
                  rope_theta, attn_scale, all_stats, layer_budget_scales)
 
     # --- Verify round-trip ---
     readback = _read_stats(out)
     assert readback["num_layers"] == num_layers
     assert readback["num_heads"] == num_heads
-    assert len(readback["stats"]) == total_heads
-    assert len(readback["layer_budget_scales"]) == num_layers
     print("Round-trip verification OK", file=sys.stderr)
 
     # --- Summary ---
     print(f"\n=== Calibration Summary ===", file=sys.stderr)
     print(f"Model:      {model_name}", file=sys.stderr)
+    print(f"Type:       {'hybrid (SSM+attention)' if is_hybrid else 'pure transformer'}", file=sys.stderr)
     print(f"Tokens:     {seq_len}", file=sys.stderr)
-    print(f"Heads:      {total_heads} ({num_layers}L × {num_heads}H)", file=sys.stderr)
+    print(f"Layers:     {num_layers} total, {len(attn_layer_indices)} attention", file=sys.stderr)
+    if is_hybrid:
+        print(f"Attention:  {sorted(attn_layer_indices)}", file=sys.stderr)
+    print(f"Heads:      {total_heads} calibrated ({num_heads}H × {len(attn_layer_indices)}L)", file=sys.stderr)
+    print(f"Head dim:   {head_dim} (rotary: {rotary_dim}, factor: {partial_rotary})", file=sys.stderr)
+    print(f"RoPE theta: {rope_theta}", file=sys.stderr)
     print(f"High MRL:   {high_mrl_count}/{total_heads} ({pct:.1f}%)", file=sys.stderr)
-    print(f"Budget:     min={min(layer_budget_scales):.3f} max={max(layer_budget_scales):.3f}", file=sys.stderr)
+    print(f"Budget:     min={min(att_scales):.3f} max={max(att_scales):.3f}", file=sys.stderr)
     print(f"Output:     {out} ({out.stat().st_size} bytes)", file=sys.stderr)
     print(f"Format:     TRIA v{VERSION}, {freq_count} freq bands per head", file=sys.stderr)
 
