@@ -191,6 +191,12 @@ def calibrate(
     head_dim = getattr(config, "head_dim", config.hidden_size // num_heads)
     num_kv_heads = getattr(config, "num_key_value_heads", num_heads)
     rope_theta = float(getattr(config, "rope_theta", 10000.0))
+    if rope_theta == 10000.0:
+        # Many models (Qwen, Llama 3.1+) use large theta but store it under
+        # different config keys. Warn loudly if we're using the default.
+        print(f"  WARNING: rope_theta=10000 (default). Verify this matches your model!\n"
+              f"  Qwen3 uses 1000000, Llama 3.1 uses 500000. Wrong theta = broken scoring at long context.",
+              file=sys.stderr)
     freq_count = head_dim // 2
 
     print(f"  layers={num_layers} heads={num_heads} kv_heads={num_kv_heads} "

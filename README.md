@@ -6,17 +6,19 @@ TriAttention exploits pre-RoPE Q/K concentration in frequency space to predict w
 
 ## llama.cpp Integration Results
 
-Tested on **Qwen3-8B Q4_K_M** / RX 7900 XTX (24GB) / ROCm 6.4 / WikiText-2 / 20 chunks / ctx=4096.
+Tested on **Qwen3-8B Q4_K_M** / RX 7900 XTX (24GB) / ROCm 6.4 / WikiText-2 / 20 chunks.
 
 ### Retention vs Quality (attention masking)
 
-| Retention | Evicted | PPL | Δ vs baseline |
-|-----------|---------|-----|---------------|
-| 100% (baseline) | 0% | 8.1524 | — |
-| 75% | 25% | 8.2129 | +0.7% |
-| 50% | 50% | 8.4907 | +4.1% |
-| 25% | 75% | 8.6415 | +6.0% |
-| 10% | 90% | 8.7901 | +7.8% |
+| ctx | Baseline | 75% retention | Δ | 50% retention | Δ |
+|-----|----------|--------------|---|--------------|---|
+| 4096 | 8.1524 | 8.2129 | +0.7% | 8.4907 | +4.1% |
+| 16384 | 8.1213 | 8.2089 | +1.1% | 8.7920 | +8.3% |
+| 32768 | 8.7843 | 8.8630 | +0.9% | 9.0344 | +2.8% |
+
+Parameters: `--tri-window 1024 --tri-interval 1024` for 16K/32K.
+
+75% retention holds <+1.1% PPL from 4K to 32K context.
 
 ### Physical Compaction (GPU kernel)
 
