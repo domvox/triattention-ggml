@@ -19,6 +19,15 @@ Based on the same pre-RoPE Q/K concentration principle as [TriAttention (Mao et 
 
 ## How it works
 
+### Attention Frequency Heatmap (Qwen3-8B)
+
+![Qwen3-8B Attention Heatmap](examples/qwen3_8b_heatmap.png)
+
+Left: Mean Resultant Length (MRL) — higher = more concentrated attention pattern.
+Right: K-vector norm — higher = stronger key signal. Boundary layers show distinct patterns.
+
+### Pipeline
+
 1. **Calibration**: Run model on representative text, record per-head attention frequency scores using RoPE-aware phase prediction
 2. **Runtime**: Every N tokens, score KV rows by predicted attention frequency, evict lowest-scoring rows, physically compact remaining rows on GPU
 3. **Sink protection**: First N tokens always kept (attention sinks, StreamingLLM-style)
