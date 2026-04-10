@@ -2,6 +2,8 @@
 
 Frequency-based KV cache pruning with GPU compaction. Removes low-importance KV rows based on attention frequency scores, then physically compacts the cache on GPU.
 
+Based on the same pre-RoPE Q/K concentration principle as [TriAttention (Mao et al., 2026)](https://arxiv.org/abs/2604.04921) — independent implementation for llama.cpp with HIP/ROCm GPU compaction kernel.
+
 ## Results (Qwen3.5-27B, RX 7900 XTX)
 
 | Context | Retention | PPL | Δ vs baseline | KV rows kept |
