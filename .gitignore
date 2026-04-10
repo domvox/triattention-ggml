@@ -1,7 +1,5 @@
-__pycache__/
-triattention_score_ref
-/tmp/
+*.o
+*.a
+bench_tria
 test_tria_lib
 test_tria_gqa
-test_tria_*.c
-bench_tria
