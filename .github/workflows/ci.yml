@@ -1,0 +1,19 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install numpy matplotlib
+      - name: Validate stats files
+        run: |
+          python3 triattention_visualize.py stats/qwen3-8b.bin -o /tmp/test.png
+          python3 triattention_visualize.py stats/qwen3.5-27b.bin -o /tmp/test2.png
+          echo "Stats validation passed"
+      - name: Check calibration script syntax
+        run: python3 -c "import ast; ast.parse(open('triattention_calibrate.py').read()); print('OK')"
