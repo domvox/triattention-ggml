@@ -46,3 +46,13 @@ This repo contains the standalone calibration tools and research notes.
 ## Hardware
 
 Tested on: AMD RX 7900 XTX 24GB, ROCm 6.4, openSUSE Tumbleweed.
+
+## TriAttention + TurboQuant Combo (Qwen3-8B, 16K context)
+
+| Config | PPL | Δ vs turbo3 |
+|---|---|---|
+| f16 baseline | 7.68 | — |
+| turbo3 only | 22.71 | — |
+| turbo3 + TriAttention 75% | **20.62** | **-9.2%** |
+
+TriAttention pruning improves turbo3 quality by removing low-importance KV rows that contribute noise.
