@@ -209,3 +209,21 @@ Best result yet. turbo3 actually scores HIGHER than f16 on Gemma 4 31B.
 
 turbo3 is BETTER than f16 on all three tested models.
 Attention sharpening (α = 1 + 1/2×SQNR) overcompensates.
+
+### FA Vec D=512 Discovery (Gemma 4)
+
+Found that Gemma 4 global layers (D=512) with turbo3 KV go to MMA FA path,
+which reads turbo3 data as raw f16 (no dequant). This is technically wrong
+but gives BETTER results than correct VEC FA dequant:
+
+| FA path | GSM8K | Notes |
+|---|---|---|
+| MMA (reads turbo3 as f16) | 83% | "Wrong" but works |
+| VEC (proper turbo3 dequant) | 78% | Correct but worse |
+| f16 baseline | 83% | Reference |
+
+Hypothesis: MMA treating turbo3 as noise on 5/30 global layers is less
+harmful than VEC dequant with quantization noise. The 25 SWA layers (f16)
+dominate the output.
+
+Added D=512 FA vec instantiations (not committed) for future investigation.
