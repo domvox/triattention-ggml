@@ -58,6 +58,28 @@ This repo contains the standalone calibration tools and research notes.
 
 Tested on: AMD RX 7900 XTX 24GB, ROCm 6.4, openSUSE Tumbleweed.
 
+## Comparison with Official TriAttention
+
+| | Official (NVIDIA) | This repo |
+|---|---|---|
+| Paper | [arXiv 2604.04921](https://arxiv.org/abs/2604.04921) | Independent implementation |
+| Language | Python (PyTorch/Triton) | C + HIP kernels |
+| Runtime | HuggingFace, vLLM, MLX | llama.cpp (ggml) |
+| GPU compaction | Python-level | Native HIP kernel |
+| TurboQuant combo | No | Yes (5.12× + 1.33× = ~6.8×) |
+| Platforms | CUDA, MLX | HIP/ROCm (AMD) |
+| Stars | 400+ | — |
+
+Both use the same core principle: pre-RoPE Q/K concentration for frequency-based importance scoring. This implementation is complementary — it targets the llama.cpp/AMD ecosystem that the official repo doesn't cover.
+
+## Contributing
+
+PRs welcome. Priority areas:
+- Stats for more models (Llama 3, Mistral, Gemma 4)
+- CUDA GPU compaction kernel (currently HIP-only)
+- Integration with official TriAttention calibration format
+- Longer context benchmarks (64K+)
+
 ## TriAttention + TurboQuant Combo (Qwen3-8B, 16K context)
 
 | Config | PPL | Δ vs turbo3 |
