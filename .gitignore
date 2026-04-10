@@ -1,7 +1,8 @@
 *.o
 *.a
 __pycache__/
-bench_tria
-test_tria_lib
-test_tria_gqa
-triattention_score_ref
+# Built binaries (no extension)
+/bench_tria
+/test_tria_lib
+/test_tria_gqa
+/triattention_score_ref
