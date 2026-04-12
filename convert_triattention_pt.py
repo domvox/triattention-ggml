@@ -41,8 +41,18 @@ def convert(pt_path: str, out_path: str, rope_theta: float = 0.0):
     num_layers = max(layers) + 1
     num_heads = max(heads) + 1
 
-    # Guess num_kv_heads (not in WeianMao format — assume same as num_heads)
-    num_kv_heads = num_heads
+    # num_kv_heads not in WeianMao format — try to infer from model config
+    num_kv_heads = num_heads  # default: no GQA
+    model_name = meta.get("model_name", "")
+    if model_name:
+        try:
+            from transformers import AutoConfig
+            cfg = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+            tcfg = getattr(cfg, "text_config", cfg)
+            num_kv_heads = getattr(tcfg, "num_key_value_heads", num_heads)
+            print(f"Inferred num_kv_heads={num_kv_heads} from {model_name}")
+        except Exception:
+            pass
 
     # Override rope_theta from meta if available
     rt = rope_theta or 0.0
