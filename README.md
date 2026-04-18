@@ -13,7 +13,7 @@ Based on [TriAttention (Mao et al., 2026)](https://arxiv.org/abs/2604.04921) —
 | 32k | 55.60 | 88.51 | **+59.2%** |
 | 65k | 39.04 | 86.45 | **+121%** |
 
-Measured with `llama-bench -n 1024 -r 2 -fa 1`, RX 7900 XTX 24GB, ROCm 7.2.1.
+Measured with `llama-bench -n 1024 -r 2 -fa 1`, RX 7900 XTX 24GB, ROCm 7.2.2.
 
 ## Quality (MATH500, Qwen3-8B Q4_K_M, budget=512 tokens)
 
